@@ -1,0 +1,61 @@
+#6、构造训练集和测试集
+data = pd.read_csv(r"E:\kaggle\fresh_comp_offline\fresh_comp_offline\dataDay.csv",index_col = 'time_day')
+
+train_x2 = data.loc[['2014-12-13','2014-12-14','2014-12-15'],:]#13、14、15号数据选作训练数据集
+train_y2 = data.loc['2014-12-16',['user_id','item_id','type_4']]  #16号购买数据作为类别标签
+train_x1 = data.loc[['2014-12-14','2014-12-15','2014-12-16'],:]#14、15、16号数据选作特征数据集
+train_y1 = data.loc['2014-12-17',['user_id','item_id','type_4']]  #17号购买数据作为类别标签
+trainx_mat = pd.concat([train_x1,train_x2])
+trainy_mat = pd.concat([train_y1,train_y2])
+traindata = pd.merge(trainx_mat,trainy_mat,on = ['user_id','item_id'],suffixes = ('_x','_y'),how = 'left')
+traindata['labels'] = traindata.type_4_y.map(lambda x:1.0 if x>0.0 else 0.0)
+trainset = traindata.copy()
+trainset.to_csv(r"E:\kaggle\fresh_comp_offline\fresh_comp_offline\traindata.csv")
+
+test_x = data.loc[['2014-12-15','2014-12-16','2014-12-17'],:]#15、16、17号数据选作测试数据集
+test_y = data.loc['2014-12-18',['user_id','item_id','type_4']]  #18号购买数据作为测试类别标签
+testdata = pd.merge(test_x,test_y,on = ['user_id','item_id'],suffixes = ('_x','_y'),how = 'left')
+testdata['labels'] = testdata.type_4_y.map(lambda x:1.0 if x>0.0 else 0.0)
+print(testdata['labels'].sum())
+testset = testdata.copy()
+testset.to_csv(r"E:\kaggle\fresh_comp_offline\fresh_comp_offline\testdata.csv")
+
+#7、训练模型
+traindata = pd.read_csv(r"E:\kaggle\fresh_comp_offline\fresh_comp_offline\traindata.csv")
+gbdt = GradientBoostingClassifier(random_state = 10)
+gbdt.fit(traindata.iloc[:,2:6],traindata.iloc[:,-1])
+precision_train = cross_val_score(gbdt,traindata.iloc[:,2:6],traindata.iloc[:,-1],cv = 5,scoring = 'precision')
+recall_train = cross_val_score(gbdt,traindata.iloc[:,2:6],traindata.iloc[:,-1],cv = 5,scoring = 'recall')
+f1_train = cross_val_score(gbdt,traindata.iloc[:,2:6],traindata.iloc[:,-1],cv = 5,scoring = 'f1')
+print(np.mean(precision_train),np.mean(recall_train),np.mean(f1_train))
+print(gbdt.score(traindata.iloc[:,2:6],traindata.iloc[:,-1]))
+
+testdata = pd.read_csv(r"E:\kaggle\fresh_comp_offline\fresh_comp_offline\testdata.csv")
+precision_test = cross_val_score(gbdt,testdata.iloc[:,2:6],testdata.iloc[:,-1],cv = 5,scoring = 'precision')
+print(np.mean(precision_test))
+recall_test = cross_val_score(gbdt,testdata.iloc[:,2:6],testdata.iloc[:,-1],cv = 5,scoring = 'recall')
+print(np.mean(recall_test))
+f1_test = cross_val_score(gbdt,testdata.iloc[:,2:6],testdata.iloc[:,-1],cv = 5,scoring = 'f1')
+
+print("f1得分:\n",np.mean(f1_test))
+
+
+#8、对19号购买情况进行预测
+predict_x = data.loc[['2014-12-16','2014-12-17','2014-12-18'],:]
+predict_y = gbdt.predict(predict_x.iloc[:,2:])
+
+user_item_19 = predict_y.loc[predict_y > 0.0,['user_id','item_id']]
+print(user_item_19.info())
+
+#4用spark.sql对数据进行筛选
+sc = SparkContext()
+hiveCtx = HiveContext(sc)
+user_sub = hiveCtx.read.csv(r'kaggle\fresh_comp_offline\fresh_comp_offline\user_sub.csv',header=True)
+sql1 = "create table temp_tianchi_train1 as select a.user_id, a.item_id,1 as flag from \
+(select * from user_sub where substr(time,1,10) >='2014-11-22' and substr( time,1,10) <='2014-11-27')a \
+inner join (select * from user_sub where substr( time,1,10) ='2014-11-28' and  behavior_type =4 )b \
+on a.user_id=b.user_id and a.item_id =b.item_id union all select a.user_id, a.item_id,0 as flag from \
+(select * from user_sub where substr( time,1,10) >='2014-11-22' and substr( time,1,10) <='2014-11-27')a \
+left join (select * from user_sub where substr( time,1,10) ='2014-11-28' and  behavior_type =4 ) b \
+on a.user_id=b.user_id and a.item_id =b.item_id where b.user_id is null"
+hiveCtx.sql(sql1)
